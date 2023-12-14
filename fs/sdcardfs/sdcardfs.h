@@ -148,8 +148,9 @@ extern struct dentry *sdcardfs_lookup(struct inode *dir, struct dentry *dentry,
 				unsigned int flags);
 extern struct inode *sdcardfs_iget(struct super_block *sb,
 				 struct inode *lower_inode, userid_t id);
-extern int sdcardfs_interpose(struct dentry *dentry, struct super_block *sb,
-			    struct path *lower_path, userid_t id);
+extern int sdcardfs_interpose(struct inode *dir, struct dentry *dentry,
+				struct super_block *sb,
+				struct path *lower_path, userid_t id);
 
 /* file private data */
 struct sdcardfs_file_info {
@@ -177,6 +178,7 @@ struct sdcardfs_inode_info {
 
 	/* top folder for ownership */
 	spinlock_t top_lock;
+	spinlock_t top_alias_lock;
 	struct sdcardfs_inode_data *top_data;
 
 	struct inode vfs_inode;
@@ -505,11 +507,13 @@ struct limit_search {
 
 extern void setup_derived_state(struct inode *inode, perm_t perm,
 			userid_t userid, uid_t uid);
-extern void get_derived_permission(struct dentry *parent, struct dentry *dentry);
-extern void get_derived_permission_new(struct dentry *parent, struct dentry *dentry, const struct qstr *name);
+extern void get_derived_permission(struct inode *parent, struct dentry *dentry);
+extern void get_derived_permission_new(struct inode *parent,
+			struct inode *inode, const struct qstr *name);
 extern void fixup_perms_recursive(struct dentry *dentry, struct limit_search *limit);
 
-extern void update_derived_permission_lock(struct dentry *dentry);
+extern void update_derived_permission_lock(struct inode *dir,
+			struct inode *inode, struct dentry *dentry);
 void fixup_lower_ownership(struct dentry *dentry, const char *name);
 extern int need_graft_path(struct dentry *dentry);
 extern int is_base_obbpath(struct dentry *dentry);
@@ -521,13 +525,13 @@ static inline struct dentry *lock_parent(struct dentry *dentry)
 {
 	struct dentry *dir = dget_parent(dentry);
 
-	mutex_lock_nested(&d_inode(dir)->i_mutex, I_MUTEX_PARENT);
+	inode_lock_nested(d_inode(dir), I_MUTEX_PARENT);
 	return dir;
 }
 
 static inline void unlock_dir(struct dentry *dir)
 {
-	mutex_unlock(&d_inode(dir)->i_mutex);
+	inode_unlock(d_inode(dir));
 	dput(dir);
 }
 
@@ -556,16 +560,16 @@ static inline int prepare_dir(const char *path_s, uid_t uid, gid_t gid, mode_t m
 	attrs.ia_uid = make_kuid(&init_user_ns, uid);
 	attrs.ia_gid = make_kgid(&init_user_ns, gid);
 	attrs.ia_valid = ATTR_UID | ATTR_GID;
-	mutex_lock(&d_inode(dent)->i_mutex);
+	inode_lock(d_inode(dent));
 	notify_change2(parent.mnt, dent, &attrs, NULL);
-	mutex_unlock(&d_inode(dent)->i_mutex);
+	inode_unlock(d_inode(dent));
 
 out_dput:
 	dput(dent);
 
 out_unlock:
 	/* parent dentry locked by lookup_create */
-	mutex_unlock(&d_inode(parent.dentry)->i_mutex);
+	inode_unlock(d_inode(parent.dentry));
 	path_put(&parent);
 	return err;
 }
